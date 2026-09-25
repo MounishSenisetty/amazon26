@@ -30,6 +30,7 @@ Methodology and design rationale are in [`docs/METHODOLOGY.md`](docs/METHODOLOGY
 - [Evaluation](#evaluation)
 - [Testing](#testing)
 - [Building the submission package](#building-the-submission-package)
+- [Running on Kaggle](#running-on-kaggle)
 - [Rules we comply with](#rules-we-comply-with)
 - [Project layout](#project-layout)
 - [Documentation](#documentation)
@@ -253,20 +254,29 @@ The organisers require a single `<team_name>_submission.zip`:
 └── Documentation_template.md  # docs/METHODOLOGY.md
 ```
 
-Set `TEAM` to your registered team name and run from the repo root:
+Build it from the repo root. The script uses only the Python standard library and does not need the `zip` command:
 
 ```bash
-TEAM=<team_name>
-STAGE=build/submission
-rm -rf "$STAGE" && mkdir -p "$STAGE/output" "$STAGE/code/business_entity_resolution"
-cp output/matching_results.tsv output/candidate_pairs.tsv "$STAGE/output/"
-cp -r src README.md requirements.txt "$STAGE/code/business_entity_resolution/"
-find "$STAGE/code" -name __pycache__ -prune -exec rm -rf {} +
-cp docs/METHODOLOGY.md "$STAGE/Documentation_template.md"
-(cd "$STAGE" && zip -r "../../${TEAM}_submission.zip" .)
+python scripts/make_submission.py --team <team_name>
+# -> ./<team_name>_submission.zip   (options: --out-dir output  --dest .  --methodology docs/METHODOLOGY.md)
 ```
 
 Before you submit, unzip the archive into a clean directory and `cd code/business_entity_resolution`. Then create a fresh virtualenv, `pip install -r requirements.txt`, and run `python -m src.cli run --data-dir /path/to/dataset --out-dir output`. Check that it reproduces both files.
+
+---
+
+## Running on Kaggle
+
+[`kaggle/amazon26_kaggle.ipynb`](kaggle/amazon26_kaggle.ipynb) runs the whole flow in a Kaggle notebook and leaves **`<TEAM_NAME>_submission.zip`** in `/kaggle/working`, where you can download it from the **Output** tab.
+
+1. **Create the notebook.** On kaggle.com choose *Create → New Notebook*, then *File → Import Notebook* and upload `kaggle/amazon26_kaggle.ipynb`.
+2. **Add the challenge data.** Choose *Add Input → Upload → New Dataset* and upload the organisers' `student_resource/` folder (or just `dataset/`), keeping it **private**. The notebook finds `train/train_source1.tsv` anywhere under `/kaggle/input`. If `utils/validate_submission.py` is included, the notebook runs it too.
+3. **Give it the code.** Either turn on *Settings → Internet* so it clones `REPO_URL` @ `REPO_BRANCH`, or upload this repo as a second dataset. For a private repo, add a `GITHUB_TOKEN` secret under *Add-ons → Secrets*.
+4. **Set `TEAM_NAME`** in the first code cell, then choose *Run All*.
+
+The notebook installs the pinned `requirements.txt` into a virtualenv, so the outputs match what reviewers reproduce from the zip. Without internet it falls back to Kaggle's preinstalled pandas and scikit-learn, which the pipeline also supports. It then runs `run` and `evaluate`, validates the outputs and builds the zip. `/kaggle/working` also receives `output/` (the two TSVs), `artifacts/` (models and `config.json`) and `validation_report.json`, which holds the numbers for `docs/METHODOLOGY.md`.
+
+**Accelerator:** the pipeline runs on CPU (scikit-learn, RapidFuzz, sparse TF-IDF). A GPU session works, but the GPU stays idle, so a CPU session is enough.
 
 ---
 
@@ -292,6 +302,8 @@ Before you submit, unzip the archive into a clean directory and `cd code/busines
 │   ├── metrics.py     # macro F0.5, pair completeness, reduction ratio
 │   └── checks.py      # submission-rule checks
 ├── tests/             # pytest suite + synthetic dataset generator
+├── scripts/make_submission.py   # builds <team_name>_submission.zip
+├── kaggle/amazon26_kaggle.ipynb  # Kaggle notebook: run everything, output the zip
 ├── docs/
 ├── requirements.txt
 └── requirements-dev.txt

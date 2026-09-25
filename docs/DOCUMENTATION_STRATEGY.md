@@ -146,7 +146,7 @@ Ordered by dependency. Priority: **P0** blocks a valid, reproducible submission;
 | 9 | `tests/` | P1 | `test_io.py`, `test_metrics.py` (asserts 0.714 example), `test_invariants.py`, `test_open_country.py`. | README §Testing table. | 🟡 Done early to verify item 5: `test_metrics`, `test_tsv`, `test_normalize`, `test_pipeline` (on a synthetic dataset) |
 | 10 | `docs/ARCHITECTURE.md` | P1 | Module map of `src/`, per-stage input/output (DataFrame columns or TSV), a data-flow diagram (normalise → block → featurise → score → threshold → write), extension points. | `src/`. | Open |
 | 11 | `docs/DATA.md` | P1 | Row counts per source and country, match cardinality (0/1/many), singleton rate, S2 vs. S3 match share, noise examples per country, address format notes (PIN vs. ZIP). | EDA notebook/script. | Open |
-| 12 | `scripts/make_submission.sh` | P1 | The README packaging snippet as a script taking `TEAM` as its argument, followed by an automatic clean-room reproduction in a temp venv. | README §Building. | Open (the README snippet was tested, including a clean-room byte-identical reproduction) |
+| 12 | `scripts/make_submission.sh` | P1 | The README packaging snippet as a script taking `TEAM` as its argument, followed by an automatic clean-room reproduction in a temp venv. | README §Building. | ✅ Done as `scripts/make_submission.py` (stdlib only), plus `kaggle/amazon26_kaggle.ipynb`, which runs the pipeline and builds the zip on Kaggle |
 | 13 | `CONTRIBUTING.md` | P2 | Dev setup (`requirements-dev.txt`), branch naming, "every PR updates EXPERIMENTS.md if val score changes", how to add a blocking key or feature. | Team conventions. | Open (`requirements-dev.txt` already exists) |
 | 14 | `docs/EXPERIMENTS.md` | P2 | Table with columns date, commit, change, val P/R/F<sub>0.5</sub>, pair completeness, public LB. | Team runs. | Open |
 | 15 | `LICENSE` | P2 | Pick one (e.g. MIT) once the team agrees. | Team decision. | Open (team decision) |
@@ -162,7 +162,7 @@ Ordered by dependency. Priority: **P0** blocks a valid, reproducible submission;
 
 ## 6. Keeping docs from rotting
 
-- **Test the README's commands.** A CI job (or `scripts/make_submission.sh`) runs the exact Quickstart commands on a tiny fixture dataset under `tests/fixtures/dataset/`, then runs the organiser validator. If the README and the CLI disagree, the build fails.
+- **Test the README's commands.** A CI job (or `scripts/make_submission.py`) runs the exact Quickstart commands on a tiny fixture dataset under `tests/fixtures/dataset/`, then runs the organiser validator. If the README and the CLI disagree, the build fails.
 - **CLI help is authoritative for flags.** When a flag changes, update `--help` and the README Configuration table in the same PR. A test can assert that every flag in the table appears in `python -m src.cli --help`.
 - **Numbers live only in METHODOLOGY and EXPERIMENTS**, never in the README.
 - **CHALLENGE.md is verbatim.** Never edit it. If organisers publish an update, replace the file and note the date in its header.
