@@ -1,0 +1,14 @@
+# Organiser data: obtain from the challenge student_resource/ bundle, never commit
+dataset/
+
+# Pipeline outputs and fitted models
+output/
+artifacts/
+build/
+*_submission.zip
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

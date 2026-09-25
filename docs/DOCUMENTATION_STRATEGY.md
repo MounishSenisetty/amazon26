@@ -2,7 +2,7 @@
 
 *Audit date: 2026-09-25 · Repo state audited: `main` @ `a6d53e3` ("Initial commit")*
 
-This document explains how the project should be documented, why, and in what order the files should be written. The README draft it refers to is [`docs/README.proposed.md`](README.proposed.md).
+This document explains how the project should be documented, why, and in what order the files should be written. The README blueprint in §4 has since been implemented as the root [`README.md`](../README.md). §5 tracks which action-plan items are done.
 
 ---
 
@@ -107,7 +107,7 @@ amazon26/                          ≙ code/business_entity_resolution/ in the z
 
 ---
 
-## 4. README blueprint (rationale for `docs/README.proposed.md`)
+## 4. README blueprint (rationale for the root `README.md`)
 
 | # | Section | Contents | Why here |
 | --- | --- | --- | --- |
@@ -125,7 +125,7 @@ amazon26/                          ≙ code/business_entity_resolution/ in the z
 | 11 | Rules we comply with | External-lookup ban, model licence/size, format. | Reviewers audit these explicitly. |
 | 12 | Documentation index | Table of `docs/*` with a "read it if you want to…" column. | Keeps the README lean without hiding depth. |
 
-**The CLI is a proposed contract.** Because `src/` does not exist yet, `python -m src.cli {train,evaluate,predict,run}` and its flags are a specification for the code to implement, not a description of existing code. The draft stays in `docs/` until the code lands. When it does, promote the draft to `/README.md` and fix any flag that differs (see §6).
+**The CLI is now implemented.** `python -m src.cli {train,evaluate,predict,run,check}` exists in `src/cli.py`, and the README flag table matches `--help`. Keep them in sync (see §6).
 
 ---
 
@@ -133,23 +133,23 @@ amazon26/                          ≙ code/business_entity_resolution/ in the z
 
 Ordered by dependency. Priority: **P0** blocks a valid, reproducible submission; **P1** is needed for review quality; **P2** helps team velocity.
 
-| # | File / directory | Priority | Contents | Source of truth |
-| --- | --- | --- | --- | --- |
-| 1 | `.gitignore` | P0 | `dataset/`, `output/`, `artifacts/`, `build/`, `*_submission.zip`, `.venv/`, `__pycache__/` | Organiser data must not be committed. |
-| 2 | `docs/CHALLENGE.md` | P0 | The attached problem statement, verbatim, with a "source: organiser `student_resource/README.md`, retrieved <date>" header. | Attached README. |
-| 3 | `utils/validate_submission.py` | P0 | Copied unmodified from `student_resource/utils/`. | Organiser bundle. |
-| 4 | `requirements.txt` | P0 | Pinned (`==`) runtime deps, generated from the working venv. | Actual imports in `src/`. |
-| 5 | `src/cli.py` (+ stage modules) | P0 | Implements the `train`/`evaluate`/`predict`/`run` contract in README §Usage/§Configuration. | This strategy §4. |
-| 6 | `README.md` | P0 | Promote `docs/README.proposed.md` and delete the draft header comment. | §4. |
-| 7 | `docs/METHODOLOGY.md` | P0 | The filled `Documentation_template.md`, all sections. Appendix A links to README §Usage. Appendix adds a **model / licence / params table**. | Attached template. |
-| 8 | `docs/EVALUATION.md` | P1 | Split protocol (hold out S1 entities with their gold, search the full S2/S3 pool), macro F<sub>0.5</sub> code with the singleton truth table, pair completeness, reduction ratio, candidates-per-entity distribution, leave-one-country-out procedure. | `src/` evaluation module. |
-| 9 | `tests/` | P1 | `test_io.py`, `test_metrics.py` (asserts 0.714 example), `test_invariants.py`, `test_open_country.py`. | README §Testing table. |
-| 10 | `docs/ARCHITECTURE.md` | P1 | Module map of `src/`, per-stage input/output (DataFrame columns or TSV), a data-flow diagram (normalise → block → featurise → score → threshold → write), extension points. | `src/`. |
-| 11 | `docs/DATA.md` | P1 | Row counts per source and country, match cardinality (0/1/many), singleton rate, S2 vs. S3 match share, noise examples per country, address format notes (PIN vs. ZIP). | EDA notebook/script. |
-| 12 | `scripts/make_submission.sh` | P1 | The README packaging snippet as a script taking `TEAM` as its argument, followed by an automatic clean-room reproduction in a temp venv. | README §Building. |
-| 13 | `CONTRIBUTING.md` | P2 | Dev setup (`requirements-dev.txt`), branch naming, "every PR updates EXPERIMENTS.md if val score changes", how to add a blocking key or feature. | Team conventions. |
-| 14 | `docs/EXPERIMENTS.md` | P2 | Table with columns date, commit, change, val P/R/F<sub>0.5</sub>, pair completeness, public LB. | Team runs. |
-| 15 | `LICENSE` | P2 | Pick one (e.g. MIT) once the team agrees. | Team decision. |
+| # | File / directory | Priority | Contents | Source of truth | Status |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `.gitignore` | P0 | `dataset/`, `output/`, `artifacts/`, `build/`, `*_submission.zip`, `.venv/`, `__pycache__/` | Organiser data must not be committed. | ✅ Done |
+| 2 | `docs/CHALLENGE.md` | P0 | The attached problem statement, verbatim, with a "source: organiser `student_resource/README.md`, retrieved <date>" header. | Attached README. | ✅ Done |
+| 3 | `utils/validate_submission.py` | P0 | Copied unmodified from `student_resource/utils/`. | Organiser bundle. | ⛔ Blocked: the organiser file is not in this environment. Copy it in from `student_resource/utils/`. Until then, `python -m src.cli check` enforces the same rules. |
+| 4 | `requirements.txt` | P0 | Pinned (`==`) runtime deps, generated from the working venv. | Actual imports in `src/`. | ✅ Done (Python ≥ 3.11 because of pandas 3 / numpy 2.4) |
+| 5 | `src/cli.py` (+ stage modules) | P0 | Implements the `train`/`evaluate`/`predict`/`run` contract in README §Usage/§Configuration. | This strategy §4. | ✅ Done (adds a `check` command) |
+| 6 | `README.md` | P0 | Promote `docs/README.proposed.md` and delete the draft header comment. | §4. | ✅ Done |
+| 7 | `docs/METHODOLOGY.md` | P0 | The filled `Documentation_template.md`, all sections. Appendix A links to README §Usage. Appendix adds a **model / licence / params table**. | Attached template. | 🟡 Methods and licence table filled. Team details and all results (§5, §6, App. B) are marked ⏳ until the pipeline is run on the real dataset. |
+| 8 | `docs/EVALUATION.md` | P1 | Split protocol (hold out S1 entities with their gold, search the full S2/S3 pool), macro F<sub>0.5</sub> code with the singleton truth table, pair completeness, reduction ratio, candidates-per-entity distribution, leave-one-country-out procedure. | `src/` evaluation module. | Open |
+| 9 | `tests/` | P1 | `test_io.py`, `test_metrics.py` (asserts 0.714 example), `test_invariants.py`, `test_open_country.py`. | README §Testing table. | 🟡 Done early to verify item 5: `test_metrics`, `test_tsv`, `test_normalize`, `test_pipeline` (on a synthetic dataset) |
+| 10 | `docs/ARCHITECTURE.md` | P1 | Module map of `src/`, per-stage input/output (DataFrame columns or TSV), a data-flow diagram (normalise → block → featurise → score → threshold → write), extension points. | `src/`. | Open |
+| 11 | `docs/DATA.md` | P1 | Row counts per source and country, match cardinality (0/1/many), singleton rate, S2 vs. S3 match share, noise examples per country, address format notes (PIN vs. ZIP). | EDA notebook/script. | Open |
+| 12 | `scripts/make_submission.sh` | P1 | The README packaging snippet as a script taking `TEAM` as its argument, followed by an automatic clean-room reproduction in a temp venv. | README §Building. | Open (the README snippet was tested, including a clean-room byte-identical reproduction) |
+| 13 | `CONTRIBUTING.md` | P2 | Dev setup (`requirements-dev.txt`), branch naming, "every PR updates EXPERIMENTS.md if val score changes", how to add a blocking key or feature. | Team conventions. | Open (`requirements-dev.txt` already exists) |
+| 14 | `docs/EXPERIMENTS.md` | P2 | Table with columns date, commit, change, val P/R/F<sub>0.5</sub>, pair completeness, public LB. | Team runs. | Open |
+| 15 | `LICENSE` | P2 | Pick one (e.g. MIT) once the team agrees. | Team decision. | Open (team decision) |
 
 ### Suggested sequencing
 
