@@ -67,7 +67,8 @@ Stages (`src/`):
 
   The candidate set is the union of the two lists.
 - **Scaling to millions of records:** the similarity is computed as a sparse product that only walks keys found in at most **3,000** pool records (`--max-df`). Very frequent keys such as `traders` or a city name carry little identity and would make the product quadratic. A record whose keys are *all* frequent still keeps its rarest key, if that key is in at most 30,000 pool records (`--fallback-df`). The work is split into tasks of bounded size and run on all cores. The final cosine features (below) use every key, not only the pruned ones.
-- No labels are used in blocking. It is deliberately *not* partitioned by country or postcode, so a noisy or missing postcode cannot silently drop a true match.
+- **Embedding channel (`--neural`):** a third channel adds each Source 1 record's top **k = 10** pool records by cosine of fine-tuned transformer embeddings (see §4), which finds matches that share no exact word: typos in every token, transliterations, reordered or abbreviated names.
+- No labels are used in word-key blocking. It is deliberately *not* partitioned by country or postcode, so a noisy or missing postcode cannot silently drop a true match.
 - **Candidate pairs generated:** ⏳ (from the `predict` report: `candidate_pairs`). At most 25 per Source 1 entity.
 - **How we ensured true matches were not lost:**
   - Two independent channels: a DBA name mismatch can still be recovered through the address, and a landmark-only address through the name.
@@ -93,6 +94,13 @@ Stages (`src/`):
   - Reverse rank: how this Source 1 entity ranks among all Source 1 entities that proposed the same pool record.
 
 **Model type:** scikit-learn `HistGradientBoostingClassifier` (300 iterations, learning rate 0.08, 31 leaves, L2 = 1.0, seed 42), trained from scratch. No pretrained model or weights are used. Alternatively (`--model xgboost`, used by the Kaggle notebook on GPU sessions), XGBoost (Apache-2.0) with the same shape of model: histogram trees with at most 31 leaves, learning rate 0.08, L2 = 1.0, and up to 1,000 rounds with early stopping after 20 rounds on a 10% row split. It is trained from scratch on the GPU (`--device cuda`) and saved for CPU prediction. ⏳ Record which model the submitted run used (`model` in `artifacts/config.json`).
+
+**Transformer cascade (`--neural`, used for GPU runs):**
+- Backbone: `sentence-transformers/all-MiniLM-L6-v2` (Apache-2.0, 22.7M parameters), fed each record's normalised `name | address`.
+- *Bi-encoder:* fine-tuned for one epoch with in-batch negatives (MultipleNegativesRanking loss, scale 20) on one gold pair per entity of a reserved set of train entities. Its embeddings give the third blocking channel and the features `emb_cos` and `emb_rank`.
+- *Stage 1:* the gradient-boosted model above plus `emb_cos`/`emb_rank`. Two-fold out-of-fold probabilities on the sample set a prefilter τ that keeps 99.8% of true pairs.
+- *Cross-encoder:* the same backbone with a one-logit head, fine-tuned for one epoch (binary cross-entropy) on up to 1M pairs of a second reserved set of entities that pass τ/5, so it sees hard negatives. It then scores every pair that passes τ.
+- *Stage 2:* a gradient-boosted model over all features plus the stage-1 probability and the cross-encoder score. The three entity sets (classifier sample incl. validation, cross-encoder, bi-encoder) are disjoint, so the validation score is not inflated by any model having seen those entities.
 
 **Threshold selection method:**
 1. Blocking and the context features run over *all* train records, so candidate lists and ranks look exactly as they will at test time. A seeded sample of Source 1 entities (`--max-train-entities`, default 400,000) is then featurised for the classifier, which keeps the fit fast on millions of entities. 20% of the sample is held out with its gold matches (`--val-frac`, `--seed`). The full Source 2/3 pool stays searchable, exactly as at test time.
@@ -135,9 +143,11 @@ src/
 ├── matcher.py     # classifier, threshold tuning, exclusive selection
 ├── metrics.py     # macro F0.5, pair completeness, reduction ratio
 ├── checks.py      # submission-rule checks
+├── neural.py      # --neural: fine-tuned bi-encoder and cross-encoder
 └── parallel.py    # fork-based parallel map over index ranges
 README.md
 requirements.txt
+requirements-neural.txt
 ```
 
 To reproduce both `output/matching_results.tsv` and `output/candidate_pairs.tsv`, follow README §Quickstart:
@@ -155,8 +165,11 @@ python -m src.cli run --data-dir /path/to/dataset --out-dir output
 | XGBoost classifier (our trained model, `--model xgboost`) | Trained by us; library XGBoost Apache-2.0 | Tree ensemble, ≤ 1,000 trees × 31 leaves | No |
 | Key hashing and IDF weights (`FeatureHasher`) | scikit-learn BSD-3-Clause | IDF computed per run on the split's own text | No |
 | RapidFuzz string metrics | MIT | None (deterministic functions) | No |
+| Bi-encoder (`--neural`): `sentence-transformers/all-MiniLM-L6-v2`, fine-tuned by us | Apache-2.0 | 22.7M | Yes (Apache-2.0), fine-tuned on the training data only |
+| Cross-encoder (`--neural`): same backbone + one-logit head, fine-tuned by us | Apache-2.0 | 22.7M + 385 | Yes (Apache-2.0), fine-tuned on the training data only |
+| PyTorch / Hugging Face Transformers (libraries) | BSD-3-Clause / Apache-2.0 | – | – |
 
-No external data, APIs, registries or geocoders are used. The pipeline makes no network calls.
+No external data, APIs, registries or geocoders are used. The only network access is downloading the pretrained transformer weights (`--neural`); no record data leaves the machine.
 
 ### B. Additional Results
 

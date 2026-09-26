@@ -5,7 +5,7 @@
 Layout:
     output/matching_results.tsv
     output/candidate_pairs.tsv
-    code/business_entity_resolution/{src/, README.md, requirements.txt}
+    code/business_entity_resolution/{src/, README.md, requirements.txt, requirements-neural.txt}
     Documentation_template.md   (from docs/METHODOLOGY.md)
 
 Uses only the standard library, so it runs anywhere the pipeline does (including Kaggle).
@@ -38,6 +38,8 @@ def build(team, out_dir, dest_dir, methodology):
         (REPO / "requirements.txt", f"{code}/requirements.txt"),
         (Path(methodology), "Documentation_template.md"),
     ]
+    if (REPO / "requirements-neural.txt").exists():
+        entries.append((REPO / "requirements-neural.txt", f"{code}/requirements-neural.txt"))
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     zip_path = dest_dir / f"{team}_submission.zip"

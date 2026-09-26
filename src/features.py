@@ -23,6 +23,8 @@ FEATURES = [
     "same_country", "is_source3",
     "name_rank", "addr_rank", "name_gap", "addr_gap", "n_candidates", "reverse_rank",
 ]
+NEURAL_FEATURES = FEATURES + ["emb_cos", "emb_rank"]  # with --neural: bi-encoder cosine and its rank
+STAGE2_FEATURES = NEURAL_FEATURES + ["p1", "ce_score"]  # stage-1 probability and cross-encoder score
 SET_FEATURES = ["core_token_jaccard", "acronym_match", "legal_form_match",
                 "addr_token_jaccard", "postcode_match", "number_jaccard"]
 STRING_FEATURES = [  # (feature, records column, scorer, scale)
@@ -103,6 +105,8 @@ def context_features(pairs):
         "addr_gap": by_s1["addr_tfidf"].transform("max") - pairs["addr_tfidf"],
         "n_candidates": by_s1["j"].transform("size"),
     }
+    if "emb_cos" in pairs:
+        out["emb_rank"] = by_s1["emb_cos"].rank(ascending=False, method="min")
     combined = pairs["name_tfidf"] + pairs["addr_tfidf"]
     out["reverse_rank"] = combined.groupby(pairs["j"], sort=False).rank(ascending=False, method="min")
     return {k: v.to_numpy(np.float32) for k, v in out.items()}

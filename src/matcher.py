@@ -9,14 +9,14 @@ from .metrics import macro_from_counts
 _SCORE_CHUNK = 2_000_000
 
 
-def fit(pairs, labels, seed, model="hgb", device="cpu", log=print):
+def fit(pairs, labels, seed, model="hgb", device="cpu", log=print, features=FEATURES):
     """Gradient-boosted trees trained from scratch on our features (no pretrained weights).
 
     model="hgb" uses scikit-learn's HistGradientBoostingClassifier (CPU).
     model="xgboost" uses XGBoost (Apache-2.0); device="cuda" trains on the GPU
     and falls back to the CPU if no usable GPU is found.
     """
-    X = pairs[FEATURES].to_numpy(np.float32)
+    X = pairs[features].to_numpy(np.float32)
     y = np.asarray(labels)
     if model == "xgboost":
         return _fit_xgboost(X, y, seed, device, log)
@@ -53,11 +53,11 @@ def _fit_xgboost(X, y, seed, device, log):
         return clf
 
 
-def score(model, pairs):
+def score(model, pairs, features=FEATURES):
     prob = np.zeros(len(pairs), dtype=np.float32)
     for start in range(0, len(pairs), _SCORE_CHUNK):  # chunked to avoid one huge float copy
         chunk = pairs.iloc[start:start + _SCORE_CHUNK]
-        prob[start:start + len(chunk)] = model.predict_proba(chunk[FEATURES].to_numpy(np.float32))[:, 1]
+        prob[start:start + len(chunk)] = model.predict_proba(chunk[features].to_numpy(np.float32))[:, 1]
     return prob
 
 

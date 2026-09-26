@@ -1,0 +1,6 @@
+# Extra dependencies for `--neural` (transformer stages), on top of requirements.txt.
+# PyTorch is BSD-3-Clause; Transformers is Apache-2.0. Tested with these versions
+# and with transformers 4.57.1. On Kaggle the preinstalled PyTorch/Transformers are used.
+-r requirements.txt
+torch==2.14.0
+transformers==5.17.0

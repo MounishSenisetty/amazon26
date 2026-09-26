@@ -30,6 +30,7 @@ Methodology and design rationale are in [`docs/METHODOLOGY.md`](docs/METHODOLOGY
 - [Evaluation](#evaluation)
 - [Testing](#testing)
 - [Building the submission package](#building-the-submission-package)
+- [Transformer stages (`--neural`)](#transformer-stages---neural)
 - [Running on Kaggle](#running-on-kaggle)
 - [Rules we comply with](#rules-we-comply-with)
 - [Project layout](#project-layout)
@@ -158,6 +159,13 @@ The pipeline is configured entirely with CLI flags (`python -m src.cli <command>
 | `--max-df` | `train`, `run` | `3000` | Blocking only searches keys found in at most this many pool records. Higher values raise recall, time and memory. |
 | `--fallback-df` | `train`, `run` | `30000` | A record whose keys are all more frequent than `--max-df` is still blocked on its rarest key, if that key is in at most this many pool records. |
 | `--diagnose-blocking` | `train`, `run` | off | Re-blocks the validation entities with 2× `k` and 3× `--max-df`, reports pair completeness for each, counts missed gold pairs that share no name or address key, and writes example misses to `blocking_misses.tsv` in `--model-dir`. |
+| `--neural` | `train`, `run` | off | Adds the transformer stages (see [Transformer stages](#transformer-stages---neural)). Needs `requirements-neural.txt` and, in practice, a GPU. |
+| `--neural-model` | `train`, `run` | `sentence-transformers/all-MiniLM-L6-v2` | Pretrained transformer to fine-tune (Hugging Face id or local folder). |
+| `--k-emb` | `train`, `run` | `10` | Embedding neighbours per Source 1 entity (third blocking channel). |
+| `--bienc-train-entities` / `--ce-train-entities` | `train`, `run` | `500000` / `300000` | Source 1 train entities reserved (disjoint from the classifier sample) to fine-tune the bi-encoder / cross-encoder. |
+| `--ce-train-pairs` | `train`, `run` | `1000000` | Cap on cross-encoder training pairs. |
+| `--neural-epochs` | `train`, `run` | `1` | Fine-tuning epochs for both transformers. |
+| `--prefilter-recall` | `train`, `run` | `0.998` | Share of true pairs the stage-1 model keeps for cross-encoder re-scoring. |
 
 The blocking settings are saved in `config.json`, so `evaluate` and `predict` reuse them automatically.
 
@@ -290,10 +298,23 @@ The notebook installs the pinned `requirements.txt` into a virtualenv (or a `pip
 
 ---
 
+## Transformer stages (`--neural`)
+
+`--neural` turns the matcher into a two-stage cascade built around a small pretrained transformer (`all-MiniLM-L6-v2`: Apache-2.0, 22.7M parameters), fine-tuned only on the training data. Each record is fed as its normalised text `name | address`.
+
+1. **Bi-encoder.** The transformer is fine-tuned with in-batch negatives on one gold pair per entity from a reserved set of train entities. Its embeddings add a **third blocking channel** (each Source 1 record's `--k-emb` nearest pool records by cosine, searched on the GPU) that finds matches sharing no exact words, and two features for every pair: `emb_cos` and its rank `emb_rank`.
+2. **Stage 1.** The gradient-boosted model over all features. Out-of-fold probabilities on the sample choose a prefilter that keeps `--prefilter-recall` of true pairs.
+3. **Cross-encoder.** A second copy of the transformer, with a one-logit head, is fine-tuned on the pairs of another reserved set of entities, then reads each surviving pair's two texts together and scores it.
+4. **Stage 2.** A gradient-boosted model over all features plus the stage-1 probability and the cross-encoder score makes the final decision. Its threshold is tuned on the validation entities, which none of the three models trained on. `config.json` reports `validation_stage1` next to `validation`, so the gain from the cross-encoder is visible.
+
+Install with `pip install -r requirements-neural.txt`. The weights download from Hugging Face on first use; the fine-tuned copies are saved in `--model-dir` (`bi_encoder/`, `cross_encoder/`), so `predict` needs no download.
+
+---
+
 ## Rules we comply with
 
-- **No external data lookup.** We use no entity-resolution APIs, government registries, geocoding APIs or internet augmentation. The pipeline makes no network calls and learns only from the provided training data.
-- **Model licence.** The final model is a gradient-boosted tree ensemble trained from scratch. It uses no pretrained weights and is far below 8B parameters. Library licences (BSD-3-Clause, MIT, Apache-2.0 for XGBoost) are listed in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md#models-and-licences).
+- **No external data lookup.** We use no entity-resolution APIs, government registries, geocoding APIs or internet augmentation, and learn only from the provided training data. The only network access is `--neural` downloading the pretrained transformer weights; no record data leaves the machine.
+- **Model licence.** The default model is a gradient-boosted tree ensemble trained from scratch, with no pretrained weights. With `--neural`, the only pretrained weights are `sentence-transformers/all-MiniLM-L6-v2` (Apache-2.0, 22.7M parameters), fine-tuned on the training data; everything is far below 8B parameters. Library licences (BSD-3-Clause, MIT, Apache-2.0 for XGBoost) are listed in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md#models-and-licences).
 - **Output format.** The pipeline follows the rules in [Outputs](#outputs) and checks them on every run.
 
 ---
@@ -311,12 +332,14 @@ The notebook installs the pinned `requirements.txt` into a virtualenv (or a `pip
 │   ├── matcher.py     # classifier, F0.5 threshold tuning, exclusive selection
 │   ├── metrics.py     # macro F0.5, pair completeness, reduction ratio
 │   ├── checks.py      # submission-rule checks
+│   ├── neural.py      # --neural: fine-tuned bi-encoder and cross-encoder
 │   └── parallel.py    # fork-based parallel map over index ranges
 ├── tests/             # pytest suite + synthetic dataset generator
 ├── scripts/make_submission.py   # builds <team_name>_submission.zip
 ├── kaggle/amazon26_kaggle.ipynb  # Kaggle notebook: run everything, output the zip
 ├── docs/
 ├── requirements.txt
+├── requirements-neural.txt   # + torch, transformers for --neural
 └── requirements-dev.txt
 ```
 

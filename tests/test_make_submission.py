@@ -17,6 +17,7 @@ def test_zip_has_the_required_layout(tmp_path):
     names = set(zipfile.ZipFile(zip_path).namelist())
     code = "code/business_entity_resolution"
     assert {"output/matching_results.tsv", "output/candidate_pairs.tsv", "Documentation_template.md",
-            f"{code}/README.md", f"{code}/requirements.txt", f"{code}/src/cli.py"} <= names
+            f"{code}/README.md", f"{code}/requirements.txt", f"{code}/requirements-neural.txt",
+            f"{code}/src/cli.py", f"{code}/src/neural.py"} <= names
     assert all(n.startswith(("output/", f"{code}/", "Documentation_template.md")) for n in names)
     assert not any("__pycache__" in n for n in names)
