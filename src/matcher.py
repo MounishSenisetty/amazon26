@@ -9,14 +9,48 @@ from .metrics import macro_from_counts
 _SCORE_CHUNK = 2_000_000
 
 
-def fit(pairs, labels, seed):
-    """Gradient-boosted trees trained from scratch on our features (no pretrained weights)."""
-    model = HistGradientBoostingClassifier(
+def fit(pairs, labels, seed, model="hgb", device="cpu", log=print):
+    """Gradient-boosted trees trained from scratch on our features (no pretrained weights).
+
+    model="hgb" uses scikit-learn's HistGradientBoostingClassifier (CPU).
+    model="xgboost" uses XGBoost (Apache-2.0); device="cuda" trains on the GPU
+    and falls back to the CPU if no usable GPU is found.
+    """
+    X = pairs[FEATURES].to_numpy(np.float32)
+    y = np.asarray(labels)
+    if model == "xgboost":
+        return _fit_xgboost(X, y, seed, device, log)
+    clf = HistGradientBoostingClassifier(
         max_iter=300, learning_rate=0.08, max_leaf_nodes=31,
         l2_regularization=1.0, random_state=seed,
     )
-    model.fit(pairs[FEATURES].to_numpy(np.float32), labels)
-    return model
+    clf.fit(X, y)
+    return clf
+
+
+def _fit_xgboost(X, y, seed, device, log):
+    import json
+
+    import xgboost as xgb
+
+    # Same shape of model as the HGB default: 31-leaf trees, early stopping on a 10% row split.
+    stop = np.random.default_rng(seed).random(len(y)) < 0.1
+    params = dict(n_estimators=1000, learning_rate=0.08, max_leaves=31, max_depth=0, grow_policy="lossguide",
+                  reg_lambda=1.0, tree_method="hist", early_stopping_rounds=20, eval_metric="logloss",
+                  random_state=seed)
+    for dev in dict.fromkeys([device, "cpu"]):
+        clf = xgb.XGBClassifier(device=dev, **params)
+        try:
+            clf.fit(X[~stop], y[~stop], eval_set=[(X[stop], y[stop])], verbose=False)
+        except xgb.core.XGBoostError as err:
+            if dev == "cpu":
+                raise
+            log(f"XGBoost could not train on {dev} ({str(err).splitlines()[0][:200]}); retrying on cpu")
+            continue
+        used = json.loads(clf.get_booster().save_config())["learner"]["generic_param"].get("device", dev)
+        log(f"XGBoost trained on {used} (requested {device}): {clf.best_iteration + 1} trees")
+        clf.set_params(device="cpu")  # the saved model predicts on any machine
+        return clf
 
 
 def score(model, pairs):

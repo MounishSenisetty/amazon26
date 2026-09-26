@@ -48,3 +48,16 @@ def test_blocking_finds_match_despite_frequent_keys():
     pairs = set(zip(i.tolist(), j.tolist()))
     assert (0, 0) in pairs  # found through the postcode x name-prefix composite
     assert (1, len(pool_names) - 1) in pairs  # typo in the name, found through the address
+
+
+def test_xgboost_classifier_falls_back_to_cpu_and_scores():
+    pytest.importorskip("xgboost")
+    from src.features import FEATURES
+    from src.matcher import fit, score
+
+    rng = np.random.default_rng(0)
+    pairs = pd.DataFrame(rng.random((400, len(FEATURES)), dtype=np.float32), columns=FEATURES)
+    labels = (pairs["name_tfidf"] > 0.5).astype(np.int8).to_numpy()
+    model = fit(pairs, labels, seed=0, model="xgboost", device="cuda", log=lambda _: None)
+    prob = score(model, pairs)
+    assert prob.shape == (400,) and ((prob > 0.5) == labels).mean() > 0.9

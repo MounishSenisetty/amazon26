@@ -166,7 +166,7 @@ def cmd_train(args):
     if val_ids:
         val_rows = np.flatnonzero(_has_id(s1["entity_id"], val_ids))
         is_val = np.isin(pairs["i"].to_numpy(), val_rows)
-        model_val = matcher.fit(pairs[~is_val], labels[~is_val], args.seed)
+        model_val = matcher.fit(pairs[~is_val], labels[~is_val], args.seed, args.model, args.device, log)
         log("fitted validation model")
         val_pairs = pairs[is_val].reset_index(drop=True)
         prob = matcher.score(model_val, val_pairs)
@@ -182,11 +182,11 @@ def cmd_train(args):
         threshold = args.threshold
     report["threshold"] = threshold
 
-    model = matcher.fit(pairs, labels, args.seed)
+    model = matcher.fit(pairs, labels, args.seed, args.model, args.device, log)
     joblib.dump(model, model_dir / "model.joblib")
     config = {
         "threshold": threshold, "exclusive": exclusive, **cfg, "seed": args.seed, "val_frac": args.val_frac,
-        "max_train_entities": args.max_train_entities, "report": report,
+        "max_train_entities": args.max_train_entities, "model": args.model, "report": report,
     }
     (model_dir / "config.json").write_text(json.dumps(config, indent=2))
     (model_dir / "split.json").write_text(json.dumps({"train": train_ids, "val": val_ids}))
@@ -282,6 +282,10 @@ def main(argv=None):
             p.add_argument("--seed", type=int, default=42, help="split and model seed (default: 42)")
             p.add_argument("--max-train-entities", type=int, default=400_000,
                            help="Source 1 train entities sampled for fitting and validation; 0 = all (default: 400000)")
+            p.add_argument("--model", choices=["hgb", "xgboost"], default="hgb",
+                           help="classifier: scikit-learn HistGradientBoosting or XGBoost (default: hgb)")
+            p.add_argument("--device", choices=["cpu", "cuda"], default="cpu",
+                           help="where XGBoost trains; cuda uses the GPU, falling back to cpu (default: cpu)")
             p.add_argument("--k-name", type=int, default=15, help="name-key neighbours per entity (default: 15)")
             p.add_argument("--k-addr", type=int, default=10, help="address-key neighbours per entity (default: 10)")
             p.add_argument("--max-df", type=int, default=3000,

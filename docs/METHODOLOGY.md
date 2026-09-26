@@ -92,7 +92,7 @@ Stages (`src/`):
   - Context within the Source 1 entity's candidate list: rank and gap to the best name and address similarity, and the number of candidates.
   - Reverse rank: how this Source 1 entity ranks among all Source 1 entities that proposed the same pool record.
 
-**Model type:** scikit-learn `HistGradientBoostingClassifier` (300 iterations, learning rate 0.08, 31 leaves, L2 = 1.0, seed 42), trained from scratch. No pretrained model or weights are used.
+**Model type:** scikit-learn `HistGradientBoostingClassifier` (300 iterations, learning rate 0.08, 31 leaves, L2 = 1.0, seed 42), trained from scratch. No pretrained model or weights are used. Alternatively (`--model xgboost`, used by the Kaggle notebook on GPU sessions), XGBoost (Apache-2.0) with the same shape of model: histogram trees with at most 31 leaves, learning rate 0.08, L2 = 1.0, and up to 1,000 rounds with early stopping after 20 rounds on a 10% row split. It is trained from scratch on the GPU (`--device cuda`) and saved for CPU prediction. ⏳ Record which model the submitted run used (`model` in `artifacts/config.json`).
 
 **Threshold selection method:**
 1. Blocking and the context features run over *all* train records, so candidate lists and ranks look exactly as they will at test time. A seeded sample of Source 1 entities (`--max-train-entities`, default 400,000) is then featurised for the classifier, which keeps the fit fast on millions of entities. 20% of the sample is held out with its gold matches (`--val-frac`, `--seed`). The full Source 2/3 pool stays searchable, exactly as at test time.
@@ -152,6 +152,7 @@ python -m src.cli run --data-dir /path/to/dataset --out-dir output
 | Component | Licence | Parameters | Pretrained? |
 | --- | --- | --- | --- |
 | HistGradientBoostingClassifier (our trained model) | Trained by us; library scikit-learn BSD-3-Clause | Tree ensemble, ≤ 300 trees × 31 leaves | No |
+| XGBoost classifier (our trained model, `--model xgboost`) | Trained by us; library XGBoost Apache-2.0 | Tree ensemble, ≤ 1,000 trees × 31 leaves | No |
 | Key hashing and IDF weights (`FeatureHasher`) | scikit-learn BSD-3-Clause | IDF computed per run on the split's own text | No |
 | RapidFuzz string metrics | MIT | None (deterministic functions) | No |
 

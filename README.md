@@ -149,6 +149,8 @@ The pipeline is configured entirely with CLI flags (`python -m src.cli <command>
 | `--threshold` | `train`, `evaluate`, `predict`, `run` | *tuned* | Overrides the F<sub>0.5</sub>-optimal threshold stored in `config.json`. |
 | `--n-jobs` | `train`, `evaluate`, `predict`, `run` | `0` (all CPUs) | Worker processes for normalisation, key hashing, blocking and set features, and RapidFuzz threads. |
 | `--max-train-entities` | `train`, `run` | `400000` | Source 1 train entities sampled (seeded) for fitting and validation. Blocking and the context features still cover every record. `0` uses all. |
+| `--model` | `train`, `run` | `hgb` | Classifier: `hgb` (scikit-learn HistGradientBoosting, CPU) or `xgboost` (XGBoost, Apache-2.0). |
+| `--device` | `train`, `run` | `cpu` | Where XGBoost trains. `cuda` uses the GPU and falls back to the CPU when none is visible; the log names the device actually used. The saved model always predicts on the CPU. |
 | `--val-frac` | `train`, `run` | `0.2` | Fraction of the sampled Source 1 train entities (with their gold matches) held out for threshold tuning. `0` skips tuning and uses 0.5. |
 | `--seed` | `train`, `run` | `42` | Seed for the split and for the classifier. |
 | `--k-name` | `train`, `run` | `15` | Name-key neighbours per Source 1 entity. |
@@ -281,7 +283,7 @@ Before you submit, unzip the archive into a clean directory and `cd code/busines
 
 The notebook installs the pinned `requirements.txt` into a virtualenv (or a `pip --target` folder when Kaggle's Python has no `venv`), so the outputs match what reviewers reproduce from the zip. Without internet it falls back to Kaggle's preinstalled pandas and scikit-learn, which the pipeline also supports. It then runs `train` and `predict` as separate processes (so train memory is released before test loads), copies the validation report that `train` wrote, validates the outputs and builds the zip. `/kaggle/working` also receives `output/` (the two TSVs), `artifacts/` (models and `config.json`) and `validation_report.json`, which holds the numbers for `docs/METHODOLOGY.md`.
 
-**Accelerator:** the pipeline runs on CPU (scikit-learn, RapidFuzz, sparse matrices) and uses every core. A GPU session works, but the GPU stays idle, so a CPU session is enough.
+**Accelerator:** a GPU session is recommended. When the notebook sees a GPU (`USE_GPU = True`), it trains with `--model xgboost --device cuda` on a larger sample (`GPU_TRAIN_ENTITIES`, default 1,000,000 Source 1 entities). Normalisation, blocking and the pair features are sparse, string-heavy work, so they run on the session's CPU cores either way. Without a GPU the notebook keeps the CPU defaults.
 
 **Memory:** every stage is chunked, and the log prints peak RAM after each one. If a session still runs out of memory (the cell fails with exit code `-9`), lower `--max-train-entities`, `--k-name`/`--k-addr` or `--max-df` through `EXTRA_ARGS`.
 
@@ -290,7 +292,7 @@ The notebook installs the pinned `requirements.txt` into a virtualenv (or a `pip
 ## Rules we comply with
 
 - **No external data lookup.** We use no entity-resolution APIs, government registries, geocoding APIs or internet augmentation. The pipeline makes no network calls and learns only from the provided training data.
-- **Model licence.** The final model is a gradient-boosted tree ensemble trained from scratch. It uses no pretrained weights and is far below 8B parameters. Library licences (BSD-3-Clause, MIT) are listed in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md#models-and-licences).
+- **Model licence.** The final model is a gradient-boosted tree ensemble trained from scratch. It uses no pretrained weights and is far below 8B parameters. Library licences (BSD-3-Clause, MIT, Apache-2.0 for XGBoost) are listed in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md#models-and-licences).
 - **Output format.** The pipeline follows the rules in [Outputs](#outputs) and checks them on every run.
 
 ---

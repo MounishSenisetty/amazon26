@@ -1,4 +1,4 @@
-# Runtime dependencies (Python >= 3.11). All BSD-3-Clause or MIT licensed.
+# Runtime dependencies (Python >= 3.11). BSD-3-Clause, MIT or Apache-2.0 licensed.
 joblib==1.6.0
 numpy==2.4.6
 pandas==3.0.6
@@ -6,3 +6,4 @@ rapidfuzz==3.14.6
 scikit-learn==1.9.1
 scipy==1.17.1
 threadpoolctl==3.7.0
+xgboost==3.2.0
