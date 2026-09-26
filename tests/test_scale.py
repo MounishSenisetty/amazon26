@@ -61,3 +61,19 @@ def test_xgboost_classifier_falls_back_to_cpu_and_scores():
     model = fit(pairs, labels, seed=0, model="xgboost", device="cuda", log=lambda _: None)
     prob = score(model, pairs)
     assert prob.shape == (400,) and ((prob > 0.5) == labels).mean() > 0.9
+
+
+def test_diagnose_classifies_unreachable_misses():
+    from src.blocking import diagnose
+
+    s1_names, s1_addr = ["Rare Widget"], ["9 Elm St, Shelbyville 67890"]
+    pool_names, pool_addr = ["Rare Widgit", "Totally Different"], ["9 Elm Street, 67890", "Near Bus Stand"]
+    records = _records(s1_names + pool_names, s1_addr + pool_addr)
+    keys = build_keys(records, n_jobs=1)
+    gold_keys = np.array([0 * 2 + 0, 0 * 2 + 1], dtype=np.int64)  # both pool rows belong to the Source 1 row
+    cfg = {"k_name": 1, "k_addr": 1, "max_df": 5, "fallback_df": 10}
+    report, examples = diagnose(keys, records, 1, 2, [0], gold_keys, cfg, n_jobs=1, log=lambda _: None)
+    assert report["gold_pairs"] == 2 and report["missed_pairs"] == 1
+    assert report["missed_sharing_no_key"] == 1
+    assert report["sweep"][0]["pair_completeness"] == 0.5
+    assert examples.loc[0, "pool_name_norm"] == "totally different"

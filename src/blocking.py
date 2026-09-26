@@ -112,15 +112,15 @@ def _topk_chunk(bounds):
     return rows[sel] + start, sims.indices[sel].astype(np.int32)
 
 
-def channel_top_k(weights, n1, k, max_df, fallback_df, n_jobs):
-    """Top-k pool rows (by pruned-key cosine) for each of the first n1 rows of `weights`.
+def channel_top_k(left, right, k, max_df, fallback_df, n_jobs):
+    """Top-k rows of `right` (pool) by pruned-key cosine for each row of `left` (Source 1).
 
-    Returns (i, j) int32 arrays: row in Source 1, row in the pool.
+    Returns (i, j) int32 arrays: row in left, row in right.
     """
-    left, right = weights[:n1], weights[n1:]
+    n1 = left.shape[0]
     if k <= 0 or n1 == 0 or right.shape[0] == 0:
         return np.zeros(0, np.int32), np.zeros(0, np.int32)
-    df_pool = np.bincount(right.indices, minlength=weights.shape[1])
+    df_pool = np.bincount(right.indices, minlength=right.shape[1])
     entry_df = df_pool[left.indices]
     keep = (entry_df >= 1) & (entry_df <= max_df)
 
@@ -135,10 +135,10 @@ def channel_top_k(weights, n1, k, max_df, fallback_df, n_jobs):
         rarest[nonempty] = np.minimum.reduceat(vals, left.indptr[nonempty])
     keep |= present & ~has_key[rows] & (entry_df == rarest[rows]) & (entry_df <= fallback_df)
 
-    used = np.zeros(weights.shape[1], dtype=bool)
+    used = np.zeros(right.shape[1], dtype=bool)
     used[left.indices[keep]] = True
     n_used = int(used.sum())
-    remap = np.full(weights.shape[1], -1, dtype=np.int32)
+    remap = np.full(right.shape[1], -1, dtype=np.int32)
     remap[used] = np.arange(n_used, dtype=np.int32)
     left_b = _mask_entries(left, keep, remap, n_used)
     right_t = _mask_entries(right, used[right.indices], remap, n_used).T.tocsr()
@@ -151,18 +151,86 @@ def channel_top_k(weights, n1, k, max_df, fallback_df, n_jobs):
             np.concatenate([p[1] for p in parts]).astype(np.int32))
 
 
+def channel_weights(keys):
+    """IDF-weighted key matrices of the name and address blocking channels."""
+    return (idf_weighted(keys["core"] + keys["core_bi"]),
+            idf_weighted(keys["addr"] + keys["addr_bi"] + keys["geo"]))
+
+
+def _union(parts, n2):
+    pair_keys = np.unique(np.concatenate([i.astype(np.int64) * n2 + j for i, j in parts]))
+    return (pair_keys // max(n2, 1)).astype(np.int32), (pair_keys % max(n2, 1)).astype(np.int32)
+
+
 def generate_candidates(keys, n1, n2, k_name=15, k_addr=10, max_df=3000, fallback_df=30000, n_jobs=1, log=print):
     """Return (i, j) int32 arrays of unique candidate pairs, sorted by i then j."""
-    name_w = idf_weighted(keys["core"] + keys["core_bi"])
-    i1, j1 = channel_top_k(name_w, n1, k_name, max_df, fallback_df, n_jobs)
+    name_w, addr_w = channel_weights(keys)
+    i1, j1 = channel_top_k(name_w[:n1], name_w[n1:], k_name, max_df, fallback_df, n_jobs)
     del name_w
     log(f"blocking: name channel proposed {len(i1)} pairs")
-    addr_w = idf_weighted(keys["addr"] + keys["addr_bi"] + keys["geo"])
-    i2, j2 = channel_top_k(addr_w, n1, k_addr, max_df, fallback_df, n_jobs)
+    i2, j2 = channel_top_k(addr_w[:n1], addr_w[n1:], k_addr, max_df, fallback_df, n_jobs)
     del addr_w
     log(f"blocking: address channel proposed {len(i2)} pairs")
-    pair_keys = np.unique(np.concatenate([i1.astype(np.int64) * n2 + j1, i2.astype(np.int64) * n2 + j2]))
-    return (pair_keys // max(n2, 1)).astype(np.int32), (pair_keys % max(n2, 1)).astype(np.int32)
+    return _union([(i1, j1), (i2, j2)], n2)
+
+
+def diagnose(keys, records, n1, n2, rows, gold_keys, cfg, n_jobs, log=print, n_examples=300):
+    """Explain blocking misses for the Source 1 rows `rows` (e.g. the validation split).
+
+    Re-runs blocking for just those rows under larger k and max_df, and sorts the
+    gold pairs the configured blocking misses into "shares no key" (no word-key
+    blocking can find them) and "shares keys" (pruned as frequent or ranked below k).
+    Returns (report dict, DataFrame of example misses).
+    """
+    import time
+
+    rows = np.asarray(rows, dtype=np.int64)
+    gold = gold_keys[np.isin(gold_keys // n2, rows)]
+    name_w, addr_w = channel_weights(keys)
+    right = (name_w[n1:], addr_w[n1:])
+    left = (name_w[rows], addr_w[rows])
+    del name_w, addr_w
+    k_n, k_a, mdf, fdf = cfg["k_name"], cfg["k_addr"], cfg["max_df"], cfg["fallback_df"]
+    sweep, found_base = [], None
+    for kn, ka, md in [(k_n, k_a, mdf), (2 * k_n, 2 * k_a, mdf), (k_n, k_a, 3 * mdf), (2 * k_n, 2 * k_a, 3 * mdf)]:
+        t = time.time()
+        parts = []
+        for w_left, w_right, k in zip(left, right, (kn, ka)):
+            i, j = channel_top_k(w_left, w_right, k, md, fdf if md == mdf else max(fdf, 10 * md), n_jobs)
+            parts.append((rows[i].astype(np.int32), j))
+        i, j = _union(parts, n2)
+        found = np.isin(gold, i.astype(np.int64) * n2 + j)
+        if found_base is None:
+            found_base = found
+        sweep.append({"k_name": kn, "k_addr": ka, "max_df": md, "pair_completeness": float(found.mean()),
+                      "candidates_per_entity": len(i) / max(len(rows), 1), "seconds": round(time.time() - t, 1)})
+        log(f"diagnose: k_name={kn} k_addr={ka} max_df={md}: pair completeness {found.mean():.4f}, "
+            f"{len(i) / max(len(rows), 1):.1f} candidates per entity")
+
+    missed = gold[~found_base]
+    mi, mj = missed // n2, missed % n2 + n1
+    share = {}
+    for name, kinds in (("name", ("core", "core_bi")), ("address", ("addr", "addr_bi", "geo"))):
+        m = keys[kinds[0]]
+        for kind in kinds[1:]:
+            m = m + keys[kind]
+        share[name] = np.asarray(m[mi].multiply(m[mj]).sum(axis=1)).ravel() > 0
+    no_key = ~share["name"] & ~share["address"]
+    report = {
+        "gold_pairs": int(len(gold)), "missed_pairs": int(len(missed)),
+        "missed_sharing_no_key": int(no_key.sum()),
+        "missed_sharing_name_key": int(share["name"].sum()),
+        "missed_sharing_only_address_key": int((~share["name"] & share["address"]).sum()),
+        "sweep": sweep,
+    }
+    pick = np.random.default_rng(0).permutation(len(missed))[:n_examples]
+    cols = ["entity_id", "name_norm", "addr_norm"]
+    left_rec = records[cols].iloc[mi[pick]].reset_index(drop=True).add_prefix("s1_")
+    right_rec = records[cols].iloc[mj[pick]].reset_index(drop=True).add_prefix("pool_")
+    examples = pd.concat([left_rec, right_rec], axis=1)
+    examples["shares_name_key"] = share["name"][pick]
+    examples["shares_address_key"] = share["address"][pick]
+    return report, examples
 
 
 def candidate_lists(i, j, s1, pool):

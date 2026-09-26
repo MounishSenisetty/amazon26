@@ -157,6 +157,7 @@ The pipeline is configured entirely with CLI flags (`python -m src.cli <command>
 | `--k-addr` | `train`, `run` | `10` | Address-key neighbours per Source 1 entity. |
 | `--max-df` | `train`, `run` | `3000` | Blocking only searches keys found in at most this many pool records. Higher values raise recall, time and memory. |
 | `--fallback-df` | `train`, `run` | `30000` | A record whose keys are all more frequent than `--max-df` is still blocked on its rarest key, if that key is in at most this many pool records. |
+| `--diagnose-blocking` | `train`, `run` | off | Re-blocks the validation entities with 2× `k` and 3× `--max-df`, reports pair completeness for each, counts missed gold pairs that share no name or address key, and writes example misses to `blocking_misses.tsv` in `--model-dir`. |
 
 The blocking settings are saved in `config.json`, so `evaluate` and `predict` reuse them automatically.
 

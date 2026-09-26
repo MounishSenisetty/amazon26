@@ -15,6 +15,7 @@ import pandas as pd
 
 from . import matcher
 from .blocking import build_keys, candidate_lists, generate_candidates
+from .blocking import diagnose as blocking_diagnose
 from .checks import check_outputs
 from .features import context_features, pair_features, similarity_features
 from .metrics import blocking_scores, macro_scores
@@ -28,12 +29,13 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg} (peak RAM {peak_gb:.1f} GB)", file=sys.stderr, flush=True)
 
 
-def _build(data_dir, split, cfg, n_jobs, select=None):
+def _build(data_dir, split, cfg, n_jobs, select=None, hook=None):
     """Read, normalise, block and featurise one split.
 
     Blocking and the context features always cover every Source 1 record, so
     they match what the model sees at test time. `select(s1_ids) -> bool mask`
     limits the expensive pair features (and the returned pairs) to some entities.
+    `hook(keys, records, s1, pool)` runs once blocking is done (used for diagnostics).
     Returns s1 and pool (entity_id, country), all candidate pairs (i, j) and the featurised pairs.
     """
     s1_raw, pool_raw = read_sources(Path(data_dir) / split, split)
@@ -60,6 +62,9 @@ def _build(data_dir, split, cfg, n_jobs, select=None):
     pairs = cand
     if select is not None:
         rows = np.flatnonzero(select(s1["entity_id"].to_numpy()))
+    if hook is not None:
+        hook(keys, records, s1, pool)
+    if select is not None:
         pairs = cand[np.isin(cand["i"].to_numpy(), rows)].reset_index(drop=True)
         cand = cand[["i", "j"]]
     gc.collect()
@@ -149,9 +154,22 @@ def cmd_train(args):
         split["train"], split["val"] = _split_ids(sample, args.val_frac, args.seed)
         return _has_id(s1_ids, sample)
 
-    s1, pool, cand, pairs = _build(args.data_dir, "train", cfg, n_jobs, select=pick)
-    train_ids, val_ids = split["train"], split["val"]
     gold = read_id_lists(Path(args.data_dir) / "train" / "train_ground_truth.tsv")
+    diagnosis = {}
+
+    def diagnose_blocking(keys, records, s1, pool):
+        rows = np.flatnonzero(_has_id(s1["entity_id"], split["val"]))
+        gold_keys, _ = _gold_arrays(gold, s1, pool)
+        report, examples = blocking_diagnose(keys, records, len(s1), len(pool), rows, gold_keys, cfg, n_jobs, log)
+        examples.to_csv(model_dir / "blocking_misses.tsv", sep="\t", index=False)
+        diagnosis.update(report)
+        log(f"diagnose: {report['missed_pairs']} of {report['gold_pairs']} validation gold pairs missed; "
+            f"{report['missed_sharing_no_key']} share no name or address key; "
+            f"examples in {model_dir / 'blocking_misses.tsv'}")
+
+    s1, pool, cand, pairs = _build(args.data_dir, "train", cfg, n_jobs, select=pick,
+                                   hook=diagnose_blocking if args.diagnose_blocking and args.val_frac > 0 else None)
+    train_ids, val_ids = split["train"], split["val"]
     gold_keys, gold_n = _gold_arrays(gold, s1, pool)
     labels = _labels(pairs, len(pool), gold_keys)
 
@@ -162,6 +180,8 @@ def cmd_train(args):
 
     report = {"exclusive": exclusive, "source1_entities": len(s1), "train_entities": len(train_ids),
               "val_entities": len(val_ids), "training_pairs": len(pairs), "positive_pairs": int(labels.sum())}
+    if diagnosis:
+        report["blocking_diagnosis"] = diagnosis
     threshold = 0.5
     if val_ids:
         val_rows = np.flatnonzero(_has_id(s1["entity_id"], val_ids))
@@ -282,6 +302,9 @@ def main(argv=None):
             p.add_argument("--seed", type=int, default=42, help="split and model seed (default: 42)")
             p.add_argument("--max-train-entities", type=int, default=400_000,
                            help="Source 1 train entities sampled for fitting and validation; 0 = all (default: 400000)")
+            p.add_argument("--diagnose-blocking", action="store_true",
+                           help="also re-block the validation entities with larger k/max-df and explain missed "
+                                "gold pairs (report + blocking_misses.tsv in --model-dir)")
             p.add_argument("--model", choices=["hgb", "xgboost"], default="hgb",
                            help="classifier: scikit-learn HistGradientBoosting or XGBoost (default: hgb)")
             p.add_argument("--device", choices=["cpu", "cuda"], default="cpu",
