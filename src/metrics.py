@@ -1,5 +1,7 @@
 """Challenge metric (macro F0.5 over all Source 1 entities) and blocking metrics."""
 
+import numpy as np
+
 BETA_SQ = 0.25
 
 
@@ -30,6 +32,21 @@ def macro_scores(predictions, gold, entity_ids):
         r.append(tp / len(true) if true else 1.0)
     n = max(len(f), 1)
     return {"f05": sum(f) / n, "precision": sum(p) / n, "recall": sum(r) / n, "entities": len(f)}
+
+
+def macro_from_counts(pred_n, tp, gold_n):
+    """Vectorised macro_scores from per-entity counts: |predicted|, |predicted & gold|, |gold|."""
+    pred_n, tp, gold_n = (np.asarray(a, dtype=np.float64) for a in (pred_n, tp, gold_n))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        p = tp / pred_n
+        r = tp / gold_n
+        f = np.where(tp > 0, (1 + BETA_SQ) * p * r / (BETA_SQ * p + r), 0.0)
+    f = np.where((pred_n == 0) & (gold_n == 0), 1.0, f)
+    precision = np.where(pred_n > 0, p, (gold_n == 0).astype(np.float64))
+    recall = np.where(gold_n > 0, r, 1.0)
+    n = max(len(f), 1)
+    return {"f05": float(f.sum() / n), "precision": float(precision.sum() / n),
+            "recall": float(recall.sum() / n), "entities": len(f)}
 
 
 def blocking_scores(candidates, gold, entity_ids, pool_size):

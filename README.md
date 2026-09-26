@@ -10,7 +10,7 @@
 
 This is our solution to the **ML Challenge 2026 Business Entity Resolution Challenge**. The full problem statement is in [`docs/CHALLENGE.md`](docs/CHALLENGE.md).
 
-- **Candidate generation (blocking):** for each Source 1 record, the pipeline takes the top 15 Source 2/3 records by character n-gram TF-IDF on the normalised name and the top 10 on the normalised address, then unions the two lists. The result is written to `candidate_pairs.tsv`.
+- **Candidate generation (blocking):** for each Source 1 record, the pipeline takes the top 15 Source 2/3 records by IDF-weighted overlap of hashed name keys (words and word bigrams) and the top 10 by address keys (words, word bigrams and postcode × name-prefix composites), then unions the two lists. Only keys found in at most 3,000 pool records are searched, so blocking scales to millions of records. The result is written to `candidate_pairs.tsv`.
 - **Matching model:** a gradient-boosted tree classifier, trained from scratch, scores every candidate on 26 name, address and context features.
 - **Metric-aware decision:** the threshold is tuned for macro F<sub>0.5</sub> *with singletons included*, and ties go to the higher threshold. When the training labels show that no Source 2/3 record belongs to two Source 1 entities, each record is also assigned to at most one Source 1 entity. The result is written to `matching_results.tsv`.
 - **Open-set countries:** no code path is keyed on `country`. Accent folding and multilingual legal forms (Pvt/Ltd, Corp/Inc, SARL/SAS) let `France`, which appears in test only, go through the same pipeline.
@@ -147,12 +147,16 @@ The pipeline is configured entirely with CLI flags (`python -m src.cli <command>
 | `--out-dir` | `predict`, `run`, `check` | `output` | Where `matching_results.tsv` and `candidate_pairs.tsv` are written or read. |
 | `--model-dir` | `train`, `evaluate`, `predict`, `run` | `artifacts` | Holds `model.joblib`, `model_val.joblib`, `config.json` (threshold, blocking k, validation report) and `split.json`. |
 | `--threshold` | `train`, `evaluate`, `predict`, `run` | *tuned* | Overrides the F<sub>0.5</sub>-optimal threshold stored in `config.json`. |
-| `--val-frac` | `train`, `run` | `0.2` | Fraction of Source 1 train entities (with their gold matches) held out for threshold tuning. `0` skips tuning and uses 0.5. |
+| `--n-jobs` | `train`, `evaluate`, `predict`, `run` | `0` (all CPUs) | Worker processes for normalisation, key hashing, blocking and set features, and RapidFuzz threads. |
+| `--max-train-entities` | `train`, `run` | `400000` | Source 1 train entities sampled (seeded) for fitting and validation. Blocking and the context features still cover every record. `0` uses all. |
+| `--val-frac` | `train`, `run` | `0.2` | Fraction of the sampled Source 1 train entities (with their gold matches) held out for threshold tuning. `0` skips tuning and uses 0.5. |
 | `--seed` | `train`, `run` | `42` | Seed for the split and for the classifier. |
-| `--k-name` | `train`, `run` | `15` | Name-similarity neighbours per Source 1 entity. |
-| `--k-addr` | `train`, `run` | `10` | Address-similarity neighbours per Source 1 entity. |
+| `--k-name` | `train`, `run` | `15` | Name-key neighbours per Source 1 entity. |
+| `--k-addr` | `train`, `run` | `10` | Address-key neighbours per Source 1 entity. |
+| `--max-df` | `train`, `run` | `3000` | Blocking only searches keys found in at most this many pool records. Higher values raise recall, time and memory. |
+| `--fallback-df` | `train`, `run` | `30000` | A record whose keys are all more frequent than `--max-df` is still blocked on its rarest key, if that key is in at most this many pool records. |
 
-The blocking `k` values are saved in `config.json`, so `evaluate` and `predict` reuse them automatically.
+The blocking settings are saved in `config.json`, so `evaluate` and `predict` reuse them automatically.
 
 | Environment variable | Suggested value | Why |
 | --- | --- | --- |
@@ -168,7 +172,8 @@ For the same data and flags, outputs are deterministic: the split and model are 
 # 1. Fit on train. Hold out 20% of S1 entities, tune the threshold, refit on all, save to artifacts/
 python -m src.cli train --data-dir dataset --model-dir artifacts --val-frac 0.2 --seed 42
 
-# 2. Re-score the held-out split: macro F0.5/P/R, blocking metrics, per-country breakdown
+# 2. (Optional) Re-score the held-out split: macro F0.5/P/R, blocking metrics, per-country breakdown.
+#    train already stores this report in artifacts/config.json; evaluate recomputes it from scratch.
 python -m src.cli evaluate --data-dir dataset --model-dir artifacts
 
 # 3. Predict on test and write both submission files (runs the rule checks)
@@ -274,9 +279,11 @@ Before you submit, unzip the archive into a clean directory and `cd code/busines
 3. **Give it the code.** Either turn on *Settings → Internet* so it clones `REPO_URL` @ `REPO_BRANCH`, or upload this repo as a second dataset. For a private repo, add a `GITHUB_TOKEN` secret under *Add-ons → Secrets*.
 4. **Set `TEAM_NAME`** in the first code cell, then choose *Run All*.
 
-The notebook installs the pinned `requirements.txt` into a virtualenv, so the outputs match what reviewers reproduce from the zip. Without internet it falls back to Kaggle's preinstalled pandas and scikit-learn, which the pipeline also supports. It then runs `run` and `evaluate`, validates the outputs and builds the zip. `/kaggle/working` also receives `output/` (the two TSVs), `artifacts/` (models and `config.json`) and `validation_report.json`, which holds the numbers for `docs/METHODOLOGY.md`.
+The notebook installs the pinned `requirements.txt` into a virtualenv (or a `pip --target` folder when Kaggle's Python has no `venv`), so the outputs match what reviewers reproduce from the zip. Without internet it falls back to Kaggle's preinstalled pandas and scikit-learn, which the pipeline also supports. It then runs `train` and `predict` as separate processes (so train memory is released before test loads), copies the validation report that `train` wrote, validates the outputs and builds the zip. `/kaggle/working` also receives `output/` (the two TSVs), `artifacts/` (models and `config.json`) and `validation_report.json`, which holds the numbers for `docs/METHODOLOGY.md`.
 
-**Accelerator:** the pipeline runs on CPU (scikit-learn, RapidFuzz, sparse TF-IDF). A GPU session works, but the GPU stays idle, so a CPU session is enough.
+**Accelerator:** the pipeline runs on CPU (scikit-learn, RapidFuzz, sparse matrices) and uses every core. A GPU session works, but the GPU stays idle, so a CPU session is enough.
+
+**Memory:** every stage is chunked, and the log prints peak RAM after each one. If a session still runs out of memory (the cell fails with exit code `-9`), lower `--max-train-entities`, `--k-name`/`--k-addr` or `--max-df` through `EXTRA_ARGS`.
 
 ---
 
@@ -296,11 +303,12 @@ The notebook installs the pinned `requirements.txt` into a virtualenv, so the ou
 │   ├── cli.py         # entry point: train | evaluate | predict | run | check
 │   ├── tsv.py         # TSV reading, ID-list writing
 │   ├── normalize.py   # name/address normalisation (country-agnostic)
-│   ├── blocking.py    # TF-IDF top-k candidate generation
+│   ├── blocking.py    # hashed-key IDF top-k candidate generation
 │   ├── features.py    # 26 pair features
 │   ├── matcher.py     # classifier, F0.5 threshold tuning, exclusive selection
 │   ├── metrics.py     # macro F0.5, pair completeness, reduction ratio
-│   └── checks.py      # submission-rule checks
+│   ├── checks.py      # submission-rule checks
+│   └── parallel.py    # fork-based parallel map over index ranges
 ├── tests/             # pytest suite + synthetic dataset generator
 ├── scripts/make_submission.py   # builds <team_name>_submission.zip
 ├── kaggle/amazon26_kaggle.ipynb  # Kaggle notebook: run everything, output the zip

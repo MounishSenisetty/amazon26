@@ -4,8 +4,14 @@ Nothing here is keyed on the country label, so records from countries unseen
 in training (e.g. France) go through exactly the same path.
 """
 
+import itertools
 import re
 import unicodedata
+
+import numpy as np
+import pandas as pd
+
+from .parallel import SHARED, fork_map, ranges
 
 # Legal-form variants mapped to one canonical token each.
 LEGAL_FORMS = {
@@ -33,14 +39,17 @@ ADDRESS_ABBREVIATIONS = {
 
 _POSTCODE = re.compile(r"\b\d{5,6}\b")
 _NUMBER = re.compile(r"\d+")
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
 def fold(text):
     """Lowercase, strip accents, turn '&' into 'and', drop apostrophes, keep [a-z0-9 ]."""
-    text = unicodedata.normalize("NFKD", text or "")
-    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
-    text = text.replace("&", " and ").replace("'", "").replace("’", "")
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", text).split())
+    text = text or ""
+    if not text.isascii():  # NFKD is the identity on ASCII, so most records skip it
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(c for c in text if not unicodedata.combining(c))
+    text = text.lower().replace("&", " and ").replace("'", "").replace("’", "")
+    return " ".join(_NON_ALNUM.sub(" ", text).split())
 
 
 def name_tokens(name):
@@ -71,13 +80,34 @@ def numbers(address):
     return frozenset(_NUMBER.findall(address or ""))
 
 
-def prepare(df):
-    """Add normalised columns used by blocking and features."""
-    out = df.copy()
-    out["name_norm"] = out["business_name"].map(normalize_name)
-    out["name_core"] = out["business_name"].map(name_core)
-    out["addr_norm"] = out["business_address"].map(normalize_address)
-    out["postcodes"] = out["business_address"].map(postcodes)
-    out["numbers"] = out["business_address"].map(numbers)
-    out["country_norm"] = out["country"].map(fold)
+def _prepare_chunk(bounds):
+    start, end = bounds
+    cols = ([], [], [], [], [])
+    for name, address in zip(SHARED["names"][start:end], SHARED["addresses"][start:end]):
+        tokens = name_tokens(name)
+        norm = " ".join(tokens)
+        cols[0].append(norm)
+        cols[1].append(" ".join(t for t in tokens if t not in LEGAL_TOKENS and t not in NAME_STOPWORDS) or norm)
+        cols[2].append(normalize_address(address))
+        cols[3].append(" ".join(sorted(postcodes(address))))
+        cols[4].append(" ".join(sorted(numbers(address))))
+    return cols
+
+
+def prepare(df, n_jobs=1):
+    """Return the normalised columns used by blocking and features.
+
+    Columns: entity_id, country, country_norm, name_norm, name_core, addr_norm,
+    postcodes and numbers (the last two as space-separated sorted strings).
+    The raw name and address are not kept, to save memory at scale.
+    """
+    tasks = ranges(len(df), 100_000)
+    parts = fork_map(_prepare_chunk, tasks, n_jobs,
+                     names=df["business_name"].to_numpy(object), addresses=df["business_address"].to_numpy(object))
+    country = pd.Categorical(df["country"].to_numpy(object))
+    out = pd.DataFrame({"entity_id": df["entity_id"].to_numpy(object), "country": country})
+    folded = np.array([fold(c) for c in country.categories], dtype=object)
+    out["country_norm"] = pd.Categorical(folded[country.codes])  # labels such as "US" and "us" may merge
+    for k, col in enumerate(["name_norm", "name_core", "addr_norm", "postcodes", "numbers"]):
+        out[col] = np.array(list(itertools.chain.from_iterable(p[k] for p in parts)), dtype=object)
     return out
