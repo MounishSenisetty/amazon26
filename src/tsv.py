@@ -3,6 +3,7 @@
 import csv
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 SOURCE_COLUMNS = ["entity_id", "business_name", "business_address", "country"]
@@ -43,7 +44,7 @@ def read_id_lists(path):
     """Read a two-column ID-list TSV (ground truth or our outputs) into {s1_id: [ids]}."""
     df = read_tsv(path)
     key, value = df.columns[:2]
-    return {row[key]: parse_id_list(row[value]) for _, row in df.iterrows()}
+    return {k: parse_id_list(v) for k, v in zip(df[key], df[value])}
 
 
 def write_id_lists(path, header, s1_ids, lists):
@@ -55,3 +56,20 @@ def write_id_lists(path, header, s1_ids, lists):
         for s1 in s1_ids:
             ids = list(dict.fromkeys(lists.get(s1, [])))
             f.write(f"{s1}\t{','.join(ids)}\n")
+
+
+def write_pair_lists(path, header, s1_ids, i, j, pool_ids):
+    """Write one row per Source 1 row index, listing pool_ids[j] for its pairs (i, j).
+
+    Pairs must be unique; within a row, IDs keep the order of the input arrays.
+    Streams from arrays, so it never builds a per-entity dict.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    order = np.argsort(i, kind="stable")
+    ids = np.asarray(pool_ids, dtype=object)[np.asarray(j)[order]]
+    bounds = np.searchsorted(np.asarray(i)[order], np.arange(len(s1_ids) + 1))
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\t".join(header) + "\n")
+        for r, s1 in enumerate(s1_ids):
+            f.write(f"{s1}\t{','.join(ids[bounds[r]:bounds[r + 1]])}\n")

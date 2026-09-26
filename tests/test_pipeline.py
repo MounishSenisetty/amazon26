@@ -52,3 +52,13 @@ def test_check_command_flags_violations(dataset, run_outputs, tmp_path, capsys):
     assert exc.value.code == 1
     out = capsys.readouterr().out
     assert "duplicate source1_entity_id" in out and "missing" in out and out.strip().endswith("FAIL")
+
+
+def test_train_report_and_evaluate_agree(dataset, run_outputs, capsys):
+    report = json.loads((run_outputs / "artifacts" / "config.json").read_text())["report"]["validation"]
+    assert set(report["by_country"]) == {"US", "India"}
+    capsys.readouterr()
+    main(["evaluate", "--data-dir", str(dataset), "--model-dir", str(run_outputs / "artifacts")])
+    evaluated = json.loads(capsys.readouterr().out)
+    assert evaluated["f05"] == pytest.approx(report["f05"])
+    assert evaluated["pair_completeness"] == pytest.approx(report["pair_completeness"])

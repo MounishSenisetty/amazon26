@@ -5,7 +5,7 @@
   to Documentation_template.md at the root of the submission zip. Keep the
   section order: it is the organisers' template.
   Items marked ⏳ need numbers from a run on the real dataset:
-  `python -m src.cli train` then `python -m src.cli evaluate` (see README §Usage).
+  `python -m src.cli train` (its report is saved under `report` in `artifacts/config.json`; see README §Usage).
 -->
 
 **Team Name:** ⏳ *(team to fill)*  
@@ -16,7 +16,7 @@
 
 ## 1. Executive Summary
 
-We use a two-stage pipeline. **Blocking** unions each Source 1 record's nearest Source 2/3 neighbours by character n-gram TF-IDF on normalised names and on normalised addresses. A **gradient-boosted tree classifier**, trained from scratch on 26 string, address and context features, then scores every candidate pair. Final matches are candidates whose probability clears a threshold chosen to maximise **macro F<sub>0.5</sub> with singletons included**. When the training ground truth shows that no Source 2/3 record belongs to two Source 1 entities, a one-owner-per-record rule is also applied. No part of the pipeline is keyed on the country label, so unseen countries such as France go through the same path.
+We use a two-stage pipeline. **Blocking** unions each Source 1 record's nearest Source 2/3 neighbours by IDF-weighted overlap of hashed name keys and of hashed address keys, searching only keys specific enough to be informative, so it scales to millions of records. A **gradient-boosted tree classifier**, trained from scratch on 26 string, address and context features, then scores every candidate pair. Final matches are candidates whose probability clears a threshold chosen to maximise **macro F<sub>0.5</sub> with singletons included**. When the training ground truth shows that no Source 2/3 record belongs to two Source 1 entities, a one-owner-per-record rule is also applied. No part of the pipeline is keyed on the country label, so unseen countries such as France go through the same path.
 
 ---
 
@@ -57,17 +57,23 @@ Stages (`src/`):
   - Unicode NFKD accent stripping and lowercasing; `&` becomes `and`; non-alphanumerics become spaces.
   - Legal forms are mapped to one token each, e.g. `private→pvt`, `limited→ltd`, `corporation→corp`. French and German forms such as SARL, SAS, SA and GmbH are kept as-is.
   - Address abbreviations are canonicalised, e.g. `road→rd`, `street→st`, `boulevard/bd→blvd`, `avenue/av→ave`.
-- **Blocking keys used:**
-  1. The top **k = 15** pool records by cosine of character 2–4-gram (`char_wb`) TF-IDF on the normalised name.
-  2. The top **k = 10** by the same representation on the normalised address.
+- **Blocking keys used:** every record is turned into hashed key sets (`FeatureHasher`, 2<sup>25</sup> buckets, so no vocabulary is held in memory):
+  - *name keys:* the words of the core name (legal forms and stopwords removed) and their adjacent-word bigrams;
+  - *address keys:* the words of the normalised address, their adjacent-word bigrams, and postcode × first-4-letters-of-each-name-word composites (e.g. `411001 shar`), which pin a business inside its postcode even when its name words are common.
 
-  The candidate set is the union of the two lists. The TF-IDF vocabulary is fitted on the text of the split being processed; no labels are used. Blocking is deliberately *not* partitioned by country or postcode, so a noisy or missing postcode cannot silently drop a true match.
+  Keys are IDF-weighted over the split's records and each record's vector is L2-normalised. For each Source 1 record we then take:
+  1. the top **k = 15** pool records by cosine over name keys;
+  2. the top **k = 10** by cosine over address keys.
+
+  The candidate set is the union of the two lists.
+- **Scaling to millions of records:** the similarity is computed as a sparse product that only walks keys found in at most **3,000** pool records (`--max-df`). Very frequent keys such as `traders` or a city name carry little identity and would make the product quadratic. A record whose keys are *all* frequent still keeps its rarest key, if that key is in at most 30,000 pool records (`--fallback-df`). The work is split into tasks of bounded size and run on all cores. The final cosine features (below) use every key, not only the pruned ones.
+- No labels are used in blocking. It is deliberately *not* partitioned by country or postcode, so a noisy or missing postcode cannot silently drop a true match.
 - **Candidate pairs generated:** ⏳ (from the `predict` report: `candidate_pairs`). At most 25 per Source 1 entity.
 - **How we ensured true matches were not lost:**
   - Two independent channels: a DBA name mismatch can still be recovered through the address, and a landmark-only address through the name.
-  - Character n-grams tolerate typos and transliteration.
-  - `evaluate` reports **pair completeness** (the recall ceiling) and the **reduction ratio** on the held-out split.
-  - `--k-name` and `--k-addr` can be raised if pair completeness is too low. Validation pair completeness is ⏳.
+  - A typo in one name word leaves the other name words, the bigrams that avoid it and the address keys intact. The postcode composites use only the first four letters of each name word, so a later typo does not break them.
+  - `train` (and `evaluate`) report **pair completeness** (the recall ceiling) and the **reduction ratio** on the held-out split.
+  - `--k-name`, `--k-addr` and `--max-df` can be raised if pair completeness is too low. Validation pair completeness is ⏳.
 
 ---
 
@@ -76,11 +82,11 @@ Stages (`src/`):
 **Features used** (`src/features.py`):
 
 - **Name features:**
-  - TF-IDF cosine.
+  - IDF-weighted cosine over all name keys (words and bigrams).
   - RapidFuzz `ratio`, `token_set_ratio` and `partial_ratio` on the normalised name.
   - `ratio`, `token_set_ratio`, Jaro-Winkler and token Jaccard on the *core* name (legal forms and stopwords removed).
   - First-token match, acronym match (e.g. "ABC" vs. "Alpha Beta Corp"), legal-form agreement (1, 0, or missing if either side has none), and relative length difference.
-- **Address features:** TF-IDF cosine, `token_set_ratio`, `partial_ratio`, token Jaccard, postcode agreement (5/6-digit codes; missing if either side has none), and Jaccard of all numbers in the address.
+- **Address features:** IDF-weighted cosine over address words and bigrams, `token_set_ratio`, `partial_ratio`, token Jaccard, postcode agreement (5/6-digit codes; missing if either side has none), and Jaccard of all numbers in the address.
 - **Other:**
   - Same country label, and whether the record comes from Source 3.
   - Context within the Source 1 entity's candidate list: rank and gap to the best name and address similarity, and the number of candidates.
@@ -89,7 +95,7 @@ Stages (`src/`):
 **Model type:** scikit-learn `HistGradientBoostingClassifier` (300 iterations, learning rate 0.08, 31 leaves, L2 = 1.0, seed 42), trained from scratch. No pretrained model or weights are used.
 
 **Threshold selection method:**
-1. Hold out 20% of Source 1 train entities, together with their gold matches (`--val-frac`, `--seed`). The full Source 2/3 pool stays searchable, exactly as at test time.
+1. Blocking and the context features run over *all* train records, so candidate lists and ranks look exactly as they will at test time. A seeded sample of Source 1 entities (`--max-train-entities`, default 400,000) is then featurised for the classifier, which keeps the fit fast on millions of entities. 20% of the sample is held out with its gold matches (`--val-frac`, `--seed`). The full Source 2/3 pool stays searchable, exactly as at test time.
 2. Fit on the remaining entities' candidate pairs.
 3. Sweep thresholds from 0.05 to 0.95 in 0.01 steps, and keep the one with the best **macro F<sub>0.5</sub> over all held-out entities, singletons included**. Ties go to the higher threshold.
 4. If the gold has no pool record shared between Source 1 entities, each pool record is kept only for its highest-scoring Source 1 entity.
@@ -99,7 +105,7 @@ Stages (`src/`):
 
 ## 5. Results & Error Analysis
 
-- **F_0.5 Score (macro):** ⏳ (validation, from `python -m src.cli evaluate`: `f05`, with the per-country breakdown under `by_country`)
+- **F_0.5 Score (macro):** ⏳ (validation, from `report.validation` in `artifacts/config.json` or `validation_report.json`: `f05`, with the per-country breakdown under `by_country`)
 - **Blocking:** pair completeness ⏳, reduction ratio ⏳
 - **Public leaderboard:** ⏳
 - **Common false positives (wrong merges):** ⏳ Expected risk: chains or franchises that share a name and differ only by address.
@@ -124,11 +130,12 @@ src/
 ├── cli.py         # entry point: train | evaluate | predict | run | check
 ├── tsv.py         # TSV reading, ID-list writing
 ├── normalize.py   # name/address normalisation
-├── blocking.py    # TF-IDF top-k candidate generation
+├── blocking.py    # hashed-key IDF top-k candidate generation
 ├── features.py    # pair features
 ├── matcher.py     # classifier, threshold tuning, exclusive selection
 ├── metrics.py     # macro F0.5, pair completeness, reduction ratio
-└── checks.py      # submission-rule checks
+├── checks.py      # submission-rule checks
+└── parallel.py    # fork-based parallel map over index ranges
 README.md
 requirements.txt
 ```
@@ -145,7 +152,7 @@ python -m src.cli run --data-dir /path/to/dataset --out-dir output
 | Component | Licence | Parameters | Pretrained? |
 | --- | --- | --- | --- |
 | HistGradientBoostingClassifier (our trained model) | Trained by us; library scikit-learn BSD-3-Clause | Tree ensemble, ≤ 300 trees × 31 leaves | No |
-| TF-IDF vectoriser | scikit-learn BSD-3-Clause | Fitted per run on the split's own text | No |
+| Key hashing and IDF weights (`FeatureHasher`) | scikit-learn BSD-3-Clause | IDF computed per run on the split's own text | No |
 | RapidFuzz string metrics | MIT | None (deterministic functions) | No |
 
 No external data, APIs, registries or geocoders are used. The pipeline makes no network calls.
